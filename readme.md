@@ -49,6 +49,7 @@ This project focuses on leveraging **JavaScript, Fetch API, and Promises** to co
 * 🌦 Weather API (OpenWeather or similar)
 * 🌍 REST Countries API
 * 💱 Currency Exchange API
+* 🗺 Wikipedia API
 
 ---
 

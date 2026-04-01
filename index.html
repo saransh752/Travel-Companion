@@ -1,15 +1,36 @@
-<!DOCTYPE html>    
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title> 
+    <title>Travel Explorer - Smart Travel Companion</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class ="container">
-        <h1>Welcome to My Website</h1>
-        <p>This is a simple webpage created as an example.</p>
-        <button onclick="alert('Button Clicked!')">Click Me</button>
+    <div class="mainbox">
+        <header class="headpart">
+            <h1>Travel Explorer</h1>
+            <p>Your Smart Travel Companion</p>
+        </header>
+
+        <div class="searcharea">
+            <div class="searchdiv">
+                <input type="text" id="cityinput" placeholder="Enter city or country..." autocomplete="off">
+                <button id="btn">Search</button>
+            </div>
+            <div id="errorMsg" class="err hide">Please enter a valid destination.</div>
+        </div>
+
+        <div id="loading" class="waitloader hide">
+            <div class="spin"></div>
+            <p>Gathering travel insights...</p>
+        </div>
+
+        <main id="resultsbox" class="resultsbox hide">
+            <!-- Cards will be injected by JS -->
+        </main>
+    </div>
+    
+    <script src="script.js"></script>
 </body>
 </html>
