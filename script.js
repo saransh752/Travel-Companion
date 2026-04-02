@@ -22,7 +22,7 @@ function doSearch() {
     getAllData(q);
 }
 
-const myKey = '5a7daa1e53d0aaa94f52997e279d7ca9';
+const myKey = config.MY_KEY;
 
 async function getW(q) {
     const res = await fetch(`https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(q)}&units=metric&appid=${myKey}`);
