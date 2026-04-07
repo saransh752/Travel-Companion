@@ -4,11 +4,43 @@ const errorMsg = document.getElementById('errorMsg');
 const loading = document.getElementById('loading');
 const resultsbox = document.getElementById('resultsbox');
 
+const themeBtn = document.getElementById('themeBtn');
+if (themeBtn) {
+    themeBtn.addEventListener('click', () => {
+        document.body.classList.toggle('dark-theme');
+    });
+}
+
+
+
+// Suggestion chips on intro page
+document.querySelectorAll('.sugg-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+        cityinput.value = chip.dataset.city;
+        doSearch();
+    });
+});
+
+let currentSpots = [];
+let likedPlaces = [];
 
 btn.addEventListener('click', doSearch);
 cityinput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') doSearch();
 });
+
+let firstSearch = true;
+
+function activateResultsMode() {
+    if (!firstSearch) return;
+    firstSearch = false;
+    const body = document.body;
+    const header = document.getElementById('headerContainer');
+    body.classList.remove('intro-mode');
+    if (header) {
+        header.style.transition = 'all 0.6s ease';
+    }
+}
 
 function doSearch() {
     const q = cityinput.value.trim();
@@ -16,9 +48,9 @@ function doSearch() {
         showErr("Please enter a destination to explore.");
         return;
     }
-    
     hideErr();
     resultsbox.innerHTML = '';
+    activateResultsMode();
     getAllData(q);
 }
 
@@ -38,7 +70,9 @@ async function getW(q) {
         cond: d.weather[0].main,
         hum: d.main.humidity + '%',
         ccode: d.sys.country,
-        cname: d.name
+        cname: d.name,
+        lat: d.coord.lat,
+        lon: d.coord.lon
     };
 }
 
@@ -109,35 +143,73 @@ async function getTips(q) {
     return "No travel insights available for this location.";
 }
 
-async function getSpots(q) {
+/**
+ * Finds real famous landmarks by reading links from the city's Wikipedia article.
+ * The city's own Wikipedia page links to its famous landmarks (Eiffel Tower, Louvre, etc.),
+ * so this guarantees highly relevant, city-specific results.
+ */
+async function getSpots(lat, lon, cityName) {
+    const placeKeywords = [
+        'tower', 'palace', 'museum', 'cathedral', 'church', 'chapel',
+        'bridge', 'park', 'garden', 'square', 'monument', 'temple',
+        'fort', 'castle', 'market', 'boulevard', 'basilica', 'opera',
+        'theatre', 'theater', 'stadium', 'arena', 'mountain', 'lake',
+        'beach', 'island', 'harbour', 'harbor', 'port', 'zoo',
+        'aquarium', 'gallery', 'shrine', 'mosque', 'synagogue',
+        'ruins', 'wall', 'gate', 'arch', 'waterfall', 'safari',
+        'monument', 'memorial', 'fountain', 'observatory'
+    ];
+
+    const junkTitles = [
+        'list of', 'lists of', 'history of', 'politics', 'commune',
+        'arrondissement', 'municipality', 'television', 'film', 'novel',
+        'song', 'album', 'footballer', 'athlete', 'politician',
+        'bombing', 'attack', 'massacre', 'riot', 'war', 'battle',
+        'election', 'census'
+    ];
+
+    const isJunk  = t => junkTitles.some(j => t.toLowerCase().includes(j));
+    const isPlace = t => placeKeywords.some(k => t.toLowerCase().includes(k));
+
     try {
-        const res1 = await fetch(`https://en.wikipedia.org/w/api.php?action=query&format=json&list=search&srsearch=tourist+attractions+in+${encodeURIComponent(q)}&utf8=1&origin=*`);
-        if (!res1.ok) return [];
-        const d1 = await res1.json();
-        
-        const list = d1.query.search
-            .map(i => i.title)
-            .filter(t => !t.toLowerCase().includes("list of") && !t.toLowerCase().includes("tourism in") && !t.toLowerCase().includes("history of"))
-            .slice(0, 5);
-            
-        const spots = await Promise.all(list.map(async (t) => {
-            try {
-                const r = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(t)}`);
-                if (!r.ok) return null;
-                const d2 = await r.json();
-                return {
-                    t: d2.title,
-                    img: d2.thumbnail ? d2.thumbnail.source : null,
-                    desc: d2.extract ? (d2.extract.length > 150 ? d2.extract.substring(0, 147) + '...' : d2.extract) : 'No description available.'
-                };
-            } catch (err) {
-                return null;
-            }
-        }));
-        
-        return spots.filter(s => s !== null);
+        // Step 1: Get all links from the city's Wikipedia article
+        const linksUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(cityName)}&prop=links&format=json&origin=*&pllimit=500&plnamespace=0`;
+        const linksRes = await fetch(linksUrl);
+        if (!linksRes.ok) return [];
+        const linksData = await linksRes.json();
+
+        const pages = Object.values(linksData.query.pages);
+        const allLinks = pages[0]?.links?.map(l => l.title) || [];
+
+        // Step 2: Keep only titles that look like real places
+        const placeLinks = allLinks
+            .filter(t => !isJunk(t) && isPlace(t))
+            .slice(0, 20);
+
+        if (placeLinks.length === 0) return [];
+
+        // Step 3: Fetch summaries and keep only those with images
+        const summaries = await Promise.all(
+            placeLinks.map(async (title) => {
+                try {
+                    const r = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`);
+                    if (!r.ok) return null;
+                    const d = await r.json();
+                    if (!d.thumbnail) return null;
+                    const extract = d.extract || '';
+                    if (extract.length < 30) return null;
+                    return {
+                        t: d.title,
+                        img: d.thumbnail.source,
+                        desc: extract.length > 160 ? extract.substring(0, 157) + '...' : extract
+                    };
+                } catch { return null; }
+            })
+        );
+
+        return summaries.filter(s => s !== null).slice(0, 8);
     } catch (err) {
-        console.error(err);
+        console.error('getSpots error:', err);
         return [];
     }
 }
@@ -152,13 +224,17 @@ async function getAllData(q) {
         const [c, t, p] = await Promise.all([
             getC(w.ccode),
             getTips(w.cname),
-            getSpots(w.cname)
+            getSpots(w.lat, w.lon, w.cname)
         ]);
         
         const m = await getMoney(c.money);
         
+        likedPlaces = [];
+        currentSpots = p || [];
+        
         loading.classList.add('hide');
-        showHTML(w, c, m, t, p);
+        showHTML(w, c, m, t);
+        renderPlacesContainer();
         
     } catch (err) {
         console.error(err);
@@ -171,14 +247,15 @@ async function getAllData(q) {
     }
 }
 
-function showHTML(w, c, m, t, p) {
+function showHTML(w, c, m, t) {
     resultsbox.innerHTML = '';
     resultsbox.classList.remove('hide');
 
     let html = `
         <div class="infobox">
             <div class="boxtop">
-                <h3 class="boxtitle">Weather Info</h3>
+                <span class="card-icon">🌦</span>
+                <h3 class="boxtitle">Weather</h3>
             </div>
             <div class="boxdata">
                 <div class="wmain">
@@ -189,16 +266,21 @@ function showHTML(w, c, m, t, p) {
                     <div class="lbl">Humidity</div>
                     <div class="val">${w.hum}</div>
                 </div>
+                <div class="rowdata">
+                    <div class="lbl">City</div>
+                    <div class="val">${w.cname}</div>
+                </div>
             </div>
         </div>
 
         <div class="infobox">
             <div class="boxtop">
+                <span class="card-icon">🌍</span>
                 <h3 class="boxtitle">Country Info</h3>
             </div>
             <div class="boxdata">
                 <div class="rowdata">
-                    <div class="lbl">Country Name</div>
+                    <div class="lbl">Country</div>
                     <div class="val">${c.n}</div>
                 </div>
                 <div class="rowdata">
@@ -218,15 +300,16 @@ function showHTML(w, c, m, t, p) {
 
         <div class="infobox">
             <div class="boxtop">
-                <h3 class="boxtitle">Currency Info</h3>
+                <span class="card-icon">💱</span>
+                <h3 class="boxtitle">Currency</h3>
             </div>
             <div class="boxdata">
                 <div class="rowdata">
-                    <div class="lbl">Currency</div>
+                    <div class="lbl">Code</div>
                     <div class="val">${m.n}</div>
                 </div>
                 <div class="rowdata">
-                    <div class="lbl">Conv. Rate</div>
+                    <div class="lbl">Rate vs USD</div>
                     <div class="val">${m.r}</div>
                 </div>
             </div>
@@ -234,35 +317,93 @@ function showHTML(w, c, m, t, p) {
 
         <div class="infobox">
             <div class="boxtop">
+                <span class="card-icon">🗺</span>
                 <h3 class="boxtitle">Travel Insights</h3>
             </div>
             <div class="boxdata tinbox">
-                <p class="tips">"${t}"</p>
+                <p class="tips">${t}</p>
             </div>
         </div>
     `;
     
-    let phtml = '';
-    if (p && p.length > 0) {
-        phtml = `
-            <div class="placesdiv">
-                <h3>Top Places to Visit</h3>
-                <div class="pgrid">
-                    ${p.map(x => `
-                        <div class="pcard">
-                            ${x.img ? `<img src="${x.img}" alt="${x.t}" class="pimg">` : '<div class="pimg noimg">No Image</div>'}
-                            <div class="pinfo">
-                                <h4>${x.t}</h4>
-                                <p>${x.desc}</p>
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
-            </div>
-        `;
+    resultsbox.innerHTML = html + '<div id="placesbox"></div>';
+}
+
+function renderPlacesContainer() {
+    const placesbox = document.getElementById('placesbox');
+    if (!placesbox || !currentSpots || currentSpots.length === 0) {
+        if(placesbox) placesbox.innerHTML = '';
+        return;
     }
     
-    resultsbox.innerHTML = html + phtml;
+    placesbox.innerHTML = `
+        <div class="placesdiv">
+            <h3>Top Places to Visit</h3>
+            <div class="places-toolbar">
+                <input type="text" id="placeSearch" placeholder="Search places..." autocomplete="off">
+                <select id="placeSort">
+                    <option value="default">Default</option>
+                    <option value="az">Name: A-Z</option>
+                    <option value="za">Name: Z-A</option>
+                </select>
+            </div>
+            <div class="pgrid" id="pgrid"></div>
+        </div>
+    `;
+    
+    const searchInput = document.getElementById('placeSearch');
+    const sortSelect = document.getElementById('placeSort');
+    
+    searchInput.addEventListener('input', updatePlacesList);
+    sortSelect.addEventListener('change', updatePlacesList);
+    
+    updatePlacesList();
+}
+
+function updatePlacesList() {
+    const searchInput = document.getElementById('placeSearch');
+    const sortSelect = document.getElementById('placeSort');
+    const pgrid = document.getElementById('pgrid');
+    if (!pgrid) return;
+    
+    const query = searchInput ? searchInput.value.toLowerCase() : '';
+    const sortVal = sortSelect ? sortSelect.value : 'default';
+    
+    let filteredSpots = currentSpots.filter(spot => {
+        return spot.t.toLowerCase().includes(query) || spot.desc.toLowerCase().includes(query);
+    });
+    
+    if (sortVal === 'az') {
+        filteredSpots = filteredSpots.slice().sort((a, b) => a.t.localeCompare(b.t));
+    } else if (sortVal === 'za') {
+        filteredSpots = filteredSpots.slice().sort((a, b) => b.t.localeCompare(a.t));
+    }
+    
+    pgrid.innerHTML = filteredSpots.map(x => `
+        <div class="pcard">
+            ${x.img ? `<img src="${x.img}" alt="${x.t}" class="pimg">` : '<div class="pimg noimg">No Image</div>'}
+            <div class="pinfo">
+                <div class="pcard-header">
+                    <h4>${x.t}</h4>
+                    <button class="heart-btn ${likedPlaces.includes(x.t) ? 'liked' : ''}" data-title="${x.t}">♥</button>
+                </div>
+                <p>${x.desc}</p>
+            </div>
+        </div>
+    `).join('');
+    
+    const hearts = pgrid.querySelectorAll('.heart-btn');
+    Array.from(hearts).map(btn => {
+        btn.addEventListener('click', (e) => {
+            const title = e.currentTarget.getAttribute('data-title');
+            if (likedPlaces.includes(title)) {
+                likedPlaces = likedPlaces.filter(t => t !== title);
+            } else {
+                likedPlaces.push(title);
+            }
+            e.currentTarget.classList.toggle('liked');
+        });
+    });
 }
 
 function showErr(m) {
@@ -274,3 +415,5 @@ function showErr(m) {
 function hideErr() {
     errorMsg.classList.add('hide');
 }
+
+
