@@ -1,419 +1,395 @@
-const cityinput = document.getElementById('cityinput');
-const btn = document.getElementById('btn');
-const errorMsg = document.getElementById('errorMsg');
-const loading = document.getElementById('loading');
-const resultsbox = document.getElementById('resultsbox');
+const searchInput = document.getElementById("searchInput");
+const searchBtn = document.getElementById("searchBtn");
+const loadingText = document.getElementById("loadingText");
+const errorText = document.getElementById("errorText");
+const results = document.getElementById("results");
+const weatherCard = document.getElementById("weatherCard");
+const countryCard = document.getElementById("countryCard");
+const currencyCard = document.getElementById("currencyCard");
+const placesCard = document.getElementById("placesCard");
+const themeToggle = document.getElementById("themeToggle");
+const recentSearchesWrap = document.getElementById("recentSearches");
+const OPEN_WEATHER_KEY = (typeof config !== "undefined" && config.MY_KEY) ? config.MY_KEY : "";
+const RECENT_KEY = "travel_explorer_recent";
+let allPlaces = [];
 
-const themeBtn = document.getElementById('themeBtn');
-if (themeBtn) {
-    themeBtn.addEventListener('click', () => {
-        document.body.classList.toggle('dark-theme');
-    });
-}
-
-
-
-// Suggestion chips on intro page
-document.querySelectorAll('.sugg-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-        cityinput.value = chip.dataset.city;
-        doSearch();
-    });
+searchBtn.addEventListener("click", () => getTravelData());
+searchInput.addEventListener("keypress", function (event) {
+    if (event.key === "Enter") getTravelData();
 });
+themeToggle.addEventListener("click", toggleTheme);
+renderRecentSearches();
 
-let currentSpots = [];
-let likedPlaces = [];
-
-btn.addEventListener('click', doSearch);
-cityinput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') doSearch();
-});
-
-let firstSearch = true;
-
-function activateResultsMode() {
-    if (!firstSearch) return;
-    firstSearch = false;
-    const body = document.body;
-    const header = document.getElementById('headerContainer');
-    body.classList.remove('intro-mode');
-    if (header) {
-        header.style.transition = 'all 0.6s ease';
-    }
+function toggleTheme() {
+    document.body.classList.toggle("dark-theme");
+    themeToggle.textContent = document.body.classList.contains("dark-theme") ? "☀ Light" : "🌙 Dark";
 }
 
-function doSearch() {
-    const q = cityinput.value.trim();
-    if (!q) {
-        showErr("Please enter a destination to explore.");
-        return;
-    }
-    hideErr();
-    resultsbox.innerHTML = '';
-    activateResultsMode();
-    getAllData(q);
+function showLoading(show) {
+    loadingText.classList.toggle("hide", !show);
 }
 
-const myKey = config.MY_KEY;
+function showError(message) {
+    errorText.textContent = message;
+    errorText.classList.remove("hide");
+}
 
-async function getW(q) {
-    const res = await fetch(`https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(q)}&units=metric&appid=${myKey}`);
-    if (!res.ok) {
-        if (res.status === 401) {
-            throw new Error("Invalid API Key. If newly created, wait up to 2 hours for activation.");
-        }
-        throw new Error("Weather data not found");
+function hideError() {
+    errorText.classList.add("hide");
+}
+
+async function fetchLocation(query) {
+    const weather = await fetchWeather(query);
+    if (!weather || !weather.countryCode) {
+        throw new Error("Location not found.");
     }
-    const d = await res.json();
     return {
-        t: Math.round(d.main.temp),
-        cond: d.weather[0].main,
-        hum: d.main.humidity + '%',
-        ccode: d.sys.country,
-        cname: d.name,
-        lat: d.coord.lat,
-        lon: d.coord.lon
+        cityName: weather.cityName,
+        countryCode: weather.countryCode
     };
 }
 
-async function getC(code) {
-    if (!code) return dummyC();
-
+function getCountryNameFromCode(code) {
     try {
-        const res = await fetch(`https://restcountries.com/v3.1/alpha/${code}`);
-        if (!res.ok) return dummyC();
-        const d = await res.json();
-        const c = d[0];
-        
-        let money = null;
-        if (c.currencies) {
-            money = Object.keys(c.currencies)[0];
-        }
-
-        return {
-            n: c.name?.common || 'N/A',
-            cap: c.capital ? c.capital[0] : 'N/A',
-            reg: c.region || 'N/A',
-            pop: c.population ? (c.population / 1000000).toFixed(1) + ' Million' : 'N/A',
-            money: money
-        };
-    } catch(e) {
-        return dummyC();
+        const display = new Intl.DisplayNames(["en"], { type: "region" });
+        return display.of(code) || code;
+    } catch (_e) {
+        return code;
     }
 }
 
-function dummyC() {
-    return { n: 'N/A', cap: 'N/A', reg: 'N/A', pop: 'N/A', money: null };
+async function fetchWeather(city) {
+    if (!OPEN_WEATHER_KEY || OPEN_WEATHER_KEY === "YOUR_API_KEY_HERE") {
+        throw new Error("OpenWeather API key is missing in config.js");
+    }
+    const res = await fetch(`https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(city)}&appid=${OPEN_WEATHER_KEY}&units=metric`);
+    if (!res.ok) throw new Error("Weather API failed.");
+    const data = await res.json();
+
+    return {
+        cityName: data.name,
+        countryCode: data.sys.country,
+        temperature: Math.round(data.main.temp),
+        condition: data.weather[0].main,
+        icon: data.weather[0].icon
+    };
 }
 
-async function getMoney(c) {
-    if (!c) return { n: 'N/A', r: 'N/A' };
-    if (c === 'USD') return { n: 'US Dollar (USD)', r: '1 USD = 1.00 USD' };
-    
-    try {
-        const res = await fetch(`https://open.er-api.com/v6/latest/USD`);
-        if (!res.ok) throw new Error("Currency API error");
-        const d = await res.json();
-        const rr = d.rates[c];
-        
-        if (rr) {
+async function fetchCountry(countryName) {
+    const res = await fetch(`https://restcountries.com/v3.1/name/${encodeURIComponent(countryName)}?fullText=false`);
+    if (!res.ok) throw new Error("Country API failed.");
+    const data = await res.json();
+    const country = Array.isArray(data) ? data[0] : null;
+    if (!country) throw new Error("Country data not found.");
+
+    const currencyCode = country.currencies ? Object.keys(country.currencies)[0] : "USD";
+    const currencyName = country.currencies ? country.currencies[currencyCode].name : "US Dollar";
+
+    return {
+        name: country.name.common,
+        capital: country.capital ? country.capital[0] : "N/A",
+        population: country.population,
+        region: country.region,
+        flag: country.flags?.png || "",
+        currencyCode,
+        currencyName
+    };
+}
+
+async function fetchCurrency() {
+    const res = await fetch("https://open.er-api.com/v6/latest/USD");
+    if (!res.ok) throw new Error("Currency API failed.");
+    const data = await res.json();
+    return data.rates || {};
+}
+
+async function fetchPlaces(city) {
+    const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srlimit=50&srsearch=${encodeURIComponent(city + " tourist attractions")}&format=json&origin=*`;
+    const searchRes = await fetch(searchUrl);
+    if (!searchRes.ok) throw new Error("Places API failed.");
+    const searchData = await searchRes.json();
+    const rawResults = searchData.query?.search || [];
+
+    const filtered = rawResults
+        .filter((item) => {
+            const text = `${item.title} ${item.snippet}`.toLowerCase();
+            return (
+                !text.includes("disambiguation") &&
+                !text.includes("wikipedia") &&
+                !text.includes("may refer to") &&
+                !text.includes("list of") &&
+                (text.includes("tourist") ||
+                 text.includes("museum") ||
+                 text.includes("park") ||
+                 text.includes("palace") ||
+                 text.includes("temple") ||
+                 text.includes("fort") ||
+                 text.includes("monument") ||
+                 text.includes("market") ||
+                 text.includes("restaurant") ||
+                 text.includes("food") ||
+                 text.includes("mall") ||
+                 text.includes(city.toLowerCase()))
+            );
+        })
+        .sort((a, b) => b.wordcount - a.wordcount)
+        .slice(0, 20);
+
+    const placesWithDetails = await Promise.all(
+        filtered.map(async (item) => {
+            const cleanTitle = item.title.replace(/\s*\(.*?\)\s*/g, "").trim();
+            const summaryRes = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(cleanTitle)}`);
+            if (!summaryRes.ok) return null;
+            const summary = await summaryRes.json();
+            if (!summary.extract) return null;
             return {
-                n: c,
-                r: `1 USD = ${rr.toFixed(2)} ${c}`
+                title: (summary.title || cleanTitle).replace(" - Wikipedia", ""),
+                description: summary.extract,
+                image: summary.thumbnail?.source || "https://images.unsplash.com/photo-1507525428034-b723cf961d3e",
+                category: detectCategory(summary.title || cleanTitle, summary.extract)
             };
-        }
-    } catch (e) {
-        console.error(e);
-    }
-    return { n: c, r: 'Rate not available' };
+        })
+    );
+
+    return placesWithDetails.filter((x) => x !== null);
 }
 
-async function getTips(q) {
-    try {
-        const res = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(q)}`);
-        if (!res.ok) return "No travel insights available for this location.";
-        const d = await res.json();
-        if (d.extract) {
-            const t = d.extract;
-            return t.length > 200 ? t.substring(0, 197) + '...' : t;
-        }
-    } catch (e) {
-        console.error(e);
+function detectCategory(title, description) {
+    const text = `${title} ${description}`.toLowerCase();
+    if (text.includes("mall") || text.includes("market") || text.includes("bazaar") || text.includes("shopping") || text.includes("shop")) {
+        return "shopping";
     }
-    return "No travel insights available for this location.";
+    if (text.includes("restaurant") || text.includes("food") || text.includes("cafe") || text.includes("street food") || text.includes("cuisine")) {
+        return "food";
+    }
+    if (text.includes("park") || text.includes("garden") || text.includes("lake") || text.includes("nature") || text.includes("river")) {
+        return "park";
+    }
+    if (text.includes("museum") || text.includes("gallery") || text.includes("art") || text.includes("exhibition")) {
+        return "museum";
+    }
+    if (text.includes("palace") || text.includes("fort") || text.includes("castle") || text.includes("historic") || text.includes("ancient") || text.includes("monument")) {
+        return "historic";
+    }
+    if (text.includes("temple") || text.includes("church") || text.includes("mosque") || text.includes("shrine") || text.includes("monastery")) {
+        return "religion";
+    }
+    return "travel";
 }
 
-/**
- * Finds real famous landmarks by reading links from the city's Wikipedia article.
- * The city's own Wikipedia page links to its famous landmarks (Eiffel Tower, Louvre, etc.),
- * so this guarantees highly relevant, city-specific results.
- */
-async function getSpots(lat, lon, cityName) {
-    const placeKeywords = [
-        'tower', 'palace', 'museum', 'cathedral', 'church', 'chapel',
-        'bridge', 'park', 'garden', 'square', 'monument', 'temple',
-        'fort', 'castle', 'market', 'boulevard', 'basilica', 'opera',
-        'theatre', 'theater', 'stadium', 'arena', 'mountain', 'lake',
-        'beach', 'island', 'harbour', 'harbor', 'port', 'zoo',
-        'aquarium', 'gallery', 'shrine', 'mosque', 'synagogue',
-        'ruins', 'wall', 'gate', 'arch', 'waterfall', 'safari',
-        'monument', 'memorial', 'fountain', 'observatory'
-    ];
-
-    const junkTitles = [
-        'list of', 'lists of', 'history of', 'politics', 'commune',
-        'arrondissement', 'municipality', 'television', 'film', 'novel',
-        'song', 'album', 'footballer', 'athlete', 'politician',
-        'bombing', 'attack', 'massacre', 'riot', 'war', 'battle',
-        'election', 'census'
-    ];
-
-    const isJunk  = t => junkTitles.some(j => t.toLowerCase().includes(j));
-    const isPlace = t => placeKeywords.some(k => t.toLowerCase().includes(k));
-
-    try {
-        // Step 1: Get all links from the city's Wikipedia article
-        const linksUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(cityName)}&prop=links&format=json&origin=*&pllimit=500&plnamespace=0`;
-        const linksRes = await fetch(linksUrl);
-        if (!linksRes.ok) return [];
-        const linksData = await linksRes.json();
-
-        const pages = Object.values(linksData.query.pages);
-        const allLinks = pages[0]?.links?.map(l => l.title) || [];
-
-        // Step 2: Keep only titles that look like real places
-        const placeLinks = allLinks
-            .filter(t => !isJunk(t) && isPlace(t))
-            .slice(0, 20);
-
-        if (placeLinks.length === 0) return [];
-
-        // Step 3: Fetch summaries and keep only those with images
-        const summaries = await Promise.all(
-            placeLinks.map(async (title) => {
-                try {
-                    const r = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`);
-                    if (!r.ok) return null;
-                    const d = await r.json();
-                    if (!d.thumbnail) return null;
-                    const extract = d.extract || '';
-                    if (extract.length < 30) return null;
-                    return {
-                        t: d.title,
-                        img: d.thumbnail.source,
-                        desc: extract.length > 160 ? extract.substring(0, 157) + '...' : extract
-                    };
-                } catch { return null; }
-            })
-        );
-
-        return summaries.filter(s => s !== null).slice(0, 8);
-    } catch (err) {
-        console.error('getSpots error:', err);
-        return [];
-    }
-}
-
-async function getAllData(q) {
-    loading.classList.remove('hide');
-    resultsbox.classList.add('hide');
-    
-    try {
-        const w = await getW(q);
-        
-        const [c, t, p] = await Promise.all([
-            getC(w.ccode),
-            getTips(w.cname),
-            getSpots(w.lat, w.lon, w.cname)
-        ]);
-        
-        const m = await getMoney(c.money);
-        
-        likedPlaces = [];
-        currentSpots = p || [];
-        
-        loading.classList.add('hide');
-        showHTML(w, c, m, t);
-        renderPlacesContainer();
-        
-    } catch (err) {
-        console.error(err);
-        loading.classList.add('hide');
-        if (err.message.includes("API Key")) {
-            showErr(err.message);
-        } else {
-            showErr("Data not found. Please try a different location.");
-        }
-    }
-}
-
-function showHTML(w, c, m, t) {
-    resultsbox.innerHTML = '';
-    resultsbox.classList.remove('hide');
-
-    let html = `
-        <div class="infobox">
-            <div class="boxtop">
-                <span class="card-icon">🌦</span>
-                <h3 class="boxtitle">Weather</h3>
+function renderWeather(weather, locationName) {
+    weatherCard.innerHTML = `
+        <h2>🌦 Weather</h2>
+        <div class="weather-main">
+            <div>
+                <p><strong>Location:</strong> ${locationName}</p>
+                <div class="weather-temp">${weather.temperature}°C</div>
+                <p><strong>Condition:</strong> ${weather.condition}</p>
             </div>
-            <div class="boxdata">
-                <div class="wmain">
-                    <div class="wtemp">${w.t}°C</div>
-                    <div class="wdesc">${w.cond}</div>
-                </div>
-                <div class="rowdata">
-                    <div class="lbl">Humidity</div>
-                    <div class="val">${w.hum}</div>
-                </div>
-                <div class="rowdata">
-                    <div class="lbl">City</div>
-                    <div class="val">${w.cname}</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="infobox">
-            <div class="boxtop">
-                <span class="card-icon">🌍</span>
-                <h3 class="boxtitle">Country Info</h3>
-            </div>
-            <div class="boxdata">
-                <div class="rowdata">
-                    <div class="lbl">Country</div>
-                    <div class="val">${c.n}</div>
-                </div>
-                <div class="rowdata">
-                    <div class="lbl">Capital</div>
-                    <div class="val">${c.cap}</div>
-                </div>
-                <div class="rowdata">
-                    <div class="lbl">Region</div>
-                    <div class="val">${c.reg}</div>
-                </div>
-                <div class="rowdata">
-                    <div class="lbl">Population</div>
-                    <div class="val">${c.pop}</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="infobox">
-            <div class="boxtop">
-                <span class="card-icon">💱</span>
-                <h3 class="boxtitle">Currency</h3>
-            </div>
-            <div class="boxdata">
-                <div class="rowdata">
-                    <div class="lbl">Code</div>
-                    <div class="val">${m.n}</div>
-                </div>
-                <div class="rowdata">
-                    <div class="lbl">Rate vs USD</div>
-                    <div class="val">${m.r}</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="infobox">
-            <div class="boxtop">
-                <span class="card-icon">🗺</span>
-                <h3 class="boxtitle">Travel Insights</h3>
-            </div>
-            <div class="boxdata tinbox">
-                <p class="tips">${t}</p>
-            </div>
+            <img class="weather-icon" src="https://openweathermap.org/img/wn/${weather.icon}@2x.png" alt="${weather.condition}">
         </div>
     `;
-    
-    resultsbox.innerHTML = html + '<div id="placesbox"></div>';
 }
 
-function renderPlacesContainer() {
-    const placesbox = document.getElementById('placesbox');
-    if (!placesbox || !currentSpots || currentSpots.length === 0) {
-        if(placesbox) placesbox.innerHTML = '';
+function renderCountry(country) {
+    countryCard.innerHTML = `
+        <h2>🌍 Country Info</h2>
+        <p><strong>Country:</strong> ${country.name}${country.flag ? `<img class="flag" src="${country.flag}" alt="${country.name} flag">` : ""}</p>
+        <p><strong>Capital:</strong> ${country.capital}</p>
+        <p><strong>Population:</strong> ${country.population.toLocaleString()}</p>
+        <p><strong>Region:</strong> ${country.region}</p>
+    `;
+}
+
+function renderCurrency(currency) {
+    currencyCard.innerHTML = `
+        <h2>💱 Currency</h2>
+        <p><strong>Name:</strong> ${currency.currencyName}</p>
+        <p><strong>Code:</strong> ${currency.currencyCode}</p>
+        <p><strong>Rate:</strong> 1 USD = ${currency.rate} ${currency.currencyCode}</p>
+    `;
+}
+
+function renderPlaces(places) {
+    if (places.length === 0) {
+        placesCard.innerHTML = `
+            <h2>🗺 Tourist Places</h2>
+            <p>No places found, try another city.</p>
+        `;
         return;
     }
-    
-    placesbox.innerHTML = `
-        <div class="placesdiv">
-            <h3>Top Places to Visit</h3>
-            <div class="places-toolbar">
-                <input type="text" id="placeSearch" placeholder="Search places..." autocomplete="off">
-                <select id="placeSort">
-                    <option value="default">Default</option>
-                    <option value="az">Name: A-Z</option>
-                    <option value="za">Name: Z-A</option>
-                </select>
-            </div>
-            <div class="pgrid" id="pgrid"></div>
+    allPlaces = places;
+
+    placesCard.innerHTML = `
+        <div class="places-top-row">
+            <h2>🗺 Top 20 Places to Visit</h2>
+            <p class="places-count">${places.length} places</p>
         </div>
+        <div class="places-filters">
+            <select id="placeTypeFilter">
+                <option value="all">All Categories</option>
+                <option value="historic">🏰 Historic</option>
+                <option value="park">🌳 Parks & Nature</option>
+                <option value="museum">🖼 Museums</option>
+                <option value="shopping">🛍 Shopping</option>
+                <option value="food">🍱 Food</option>
+                <option value="religion">🕉 Religion</option>
+                <option value="travel">✈ Travel</option>
+            </select>
+            <input type="text" id="placeSearchFilter" placeholder="Search in places...">
+            <select id="placeSortFilter">
+                <option value="relevance">Sort: Relevance</option>
+                <option value="az">Sort: A-Z</option>
+                <option value="za">Sort: Z-A</option>
+                <option value="category">Sort: Category</option>
+                <option value="detailed">Sort: Most Detailed</option>
+            </select>
+        </div>
+        <div class="places-grid" id="placesGrid"></div>
     `;
-    
-    const searchInput = document.getElementById('placeSearch');
-    const sortSelect = document.getElementById('placeSort');
-    
-    searchInput.addEventListener('input', updatePlacesList);
-    sortSelect.addEventListener('change', updatePlacesList);
-    
-    updatePlacesList();
+
+    const placeTypeFilter = document.getElementById("placeTypeFilter");
+    const placeSearchFilter = document.getElementById("placeSearchFilter");
+    const placeSortFilter = document.getElementById("placeSortFilter");
+
+    placeTypeFilter.addEventListener("change", updatePlacesGrid);
+    placeSearchFilter.addEventListener("input", updatePlacesGrid);
+    placeSortFilter.addEventListener("change", updatePlacesGrid);
+
+    updatePlacesGrid();
 }
 
-function updatePlacesList() {
-    const searchInput = document.getElementById('placeSearch');
-    const sortSelect = document.getElementById('placeSort');
-    const pgrid = document.getElementById('pgrid');
-    if (!pgrid) return;
-    
-    const query = searchInput ? searchInput.value.toLowerCase() : '';
-    const sortVal = sortSelect ? sortSelect.value : 'default';
-    
-    let filteredSpots = currentSpots.filter(spot => {
-        return spot.t.toLowerCase().includes(query) || spot.desc.toLowerCase().includes(query);
+function updatePlacesGrid() {
+    const grid = document.getElementById("placesGrid");
+    const placeTypeFilter = document.getElementById("placeTypeFilter");
+    const placeSearchFilter = document.getElementById("placeSearchFilter");
+    const placeSortFilter = document.getElementById("placeSortFilter");
+    if (!grid || !placeTypeFilter || !placeSearchFilter || !placeSortFilter) return;
+
+    const type = placeTypeFilter.value;
+    const text = placeSearchFilter.value.trim().toLowerCase();
+    const sortType = placeSortFilter.value;
+
+    let filtered = allPlaces.filter((place) => {
+        const typeMatch = type === "all" ? true : place.category === type;
+        const textMatch =
+            place.title.toLowerCase().includes(text) ||
+            place.description.toLowerCase().includes(text);
+        return typeMatch && textMatch;
     });
-    
-    if (sortVal === 'az') {
-        filteredSpots = filteredSpots.slice().sort((a, b) => a.t.localeCompare(b.t));
-    } else if (sortVal === 'za') {
-        filteredSpots = filteredSpots.slice().sort((a, b) => b.t.localeCompare(a.t));
+
+    if (sortType === "az") {
+        filtered.sort((a, b) => a.title.localeCompare(b.title));
+    } else if (sortType === "za") {
+        filtered.sort((a, b) => b.title.localeCompare(a.title));
+    } else if (sortType === "category") {
+        filtered.sort((a, b) => a.category.localeCompare(b.category));
+    } else if (sortType === "detailed") {
+        filtered.sort((a, b) => b.description.length - a.description.length);
     }
-    
-    pgrid.innerHTML = filteredSpots.map(x => `
-        <div class="pcard">
-            ${x.img ? `<img src="${x.img}" alt="${x.t}" class="pimg">` : '<div class="pimg noimg">No Image</div>'}
-            <div class="pinfo">
-                <div class="pcard-header">
-                    <h4>${x.t}</h4>
-                    <button class="heart-btn ${likedPlaces.includes(x.t) ? 'liked' : ''}" data-title="${x.t}">♥</button>
+
+    if (!filtered.length) {
+        grid.innerHTML = "<p>No places match this filter.</p>";
+        return;
+    }
+
+    grid.innerHTML = filtered.map((place) => {
+        const shortText = place.description.length > 120
+            ? place.description.slice(0, 120) + "..."
+            : place.description;
+
+        return `
+            <div class="place-card fade-in">
+                <img src="${place.image}" alt="${place.title}">
+                <div class="place-content">
+                    <h4>${place.title}</h4>
+                    <span class="place-tag" data-cat="${place.category}">${place.category}</span>
+                    <p>${shortText}</p>
                 </div>
-                <p>${x.desc}</p>
             </div>
-        </div>
-    `).join('');
-    
-    const hearts = pgrid.querySelectorAll('.heart-btn');
-    Array.from(hearts).map(btn => {
-        btn.addEventListener('click', (e) => {
-            const title = e.currentTarget.getAttribute('data-title');
-            if (likedPlaces.includes(title)) {
-                likedPlaces = likedPlaces.filter(t => t !== title);
-            } else {
-                likedPlaces.push(title);
-            }
-            e.currentTarget.classList.toggle('liked');
+        `;
+    }).join("");
+}
+
+function onDataLoaded(callback) {
+    callback();
+}
+
+async function getTravelData() {
+    const query = searchInput.value.trim();
+    if (!query) {
+        showError("Please type a city or country.");
+        return;
+    }
+
+    showLoading(true);
+    hideError();
+    results.classList.add("hide");
+
+    try {
+        const weatherForLocation = await fetchWeather(query);
+        const location = await fetchLocation(query);
+        const countryName = getCountryNameFromCode(location.countryCode);
+        const [weather, country, rates, places] = await Promise.all([
+            fetchWeather(query),
+            fetchCountry(countryName),
+            fetchCurrency(),
+            fetchPlaces(weatherForLocation.cityName)
+        ]);
+
+        const rate = rates[country.currencyCode] ? Number(rates[country.currencyCode]).toFixed(2) : "N/A";
+        const currency = {
+            currencyCode: country.currencyCode,
+            currencyName: country.currencyName,
+            rate
+        };
+
+        renderWeather(weather, location.cityName);
+        renderCountry(country);
+        renderCurrency(currency);
+        renderPlaces(places);
+        saveRecentSearch(query);
+
+        onDataLoaded(function () {
+            showLoading(false);
+            results.classList.remove("hide");
+        });
+    } catch (error) {
+        showLoading(false);
+        if (error && error.message === "Failed to fetch") {
+            showError("Network/API issue. Please try again in a few seconds.");
+        } else {
+            showError(error.message || "Something went wrong.");
+        }
+    }
+}
+
+function saveRecentSearch(text) {
+    const prev = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
+    const normalized = text.trim();
+    const updated = [normalized, ...prev.filter((x) => x.toLowerCase() !== normalized.toLowerCase())].slice(0, 6);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(updated));
+    renderRecentSearches();
+}
+
+function renderRecentSearches() {
+    const items = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
+    if (!items.length) {
+        recentSearchesWrap.innerHTML = "";
+        return;
+    }
+
+    recentSearchesWrap.innerHTML = items
+        .map((item) => `<button class="recent-chip" data-city="${item}">${item}</button>`)
+        .join("");
+
+    const chips = recentSearchesWrap.querySelectorAll(".recent-chip");
+    chips.forEach((chip) => {
+        chip.addEventListener("click", () => {
+            searchInput.value = chip.getAttribute("data-city");
+            getTravelData();
         });
     });
-}
-
-function showErr(m) {
-    errorMsg.textContent = m;
-    errorMsg.classList.remove('hide');
-    resultsbox.classList.add('hide');
-}
-
-function hideErr() {
-    errorMsg.classList.add('hide');
 }
 
 
