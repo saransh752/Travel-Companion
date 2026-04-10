@@ -16,6 +16,20 @@ const RECENT_KEY = "travel_explorer_recent";
 const PLACE_DETAIL_KEY = "travel_explorer_selected_place";
 let allPlaces = [];
 const DEFAULT_PLACE_IMAGE = "https://picsum.photos/seed/travel-default/600/400";
+const placeImageCache = new Map();
+const NOISY_NAME_PATTERNS = [
+    /^m$/i,
+    /^view$/i,
+    /^road$/i,
+    /^street$/i,
+    /^gate$/i,
+    /^house$/i,
+    /^shop$/i,
+    /^roundabout/i,
+    /^rooftop/i,
+    /chowk/i,
+    /bazar/i
+];
 
 searchBtn.addEventListener("click", () => getTravelData());
 searchInput.addEventListener("keypress", function (event) {
@@ -43,51 +57,60 @@ function hideError() {
 }
 
 function getCategoryFallbackImage(category) {
-    const query = category || "travel";
-    return `https://source.unsplash.com/600x400/?${encodeURIComponent(query + ",landmark")}`;
+    const seed = `travel-${category || "travel"}-fallback`;
+    return `https://picsum.photos/seed/${encodeURIComponent(seed)}/600/400`;
 }
 
 async function getBestPlaceImage(placeName, cityName, category) {
-    // 1) Try Wikipedia thumbnail first (most relevant to place)
+    const cacheKey = `${placeName}::${cityName}`.toLowerCase();
+    if (placeImageCache.has(cacheKey)) return placeImageCache.get(cacheKey);
+
+    // 1) Exact summary image
     try {
-        const wikiRes = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(placeName)}`);
-        if (wikiRes.ok) {
-            const wikiData = await wikiRes.json();
-            // Keep relevance guard, but less strict so good thumbnails are not rejected.
-            const title = (wikiData.title || "").toLowerCase();
-            const placeLower = placeName.toLowerCase();
-            const hasReasonableMatch = title.includes(placeLower) || placeLower.includes(title) || title.length > 2;
-            if (wikiData.thumbnail?.source && hasReasonableMatch) {
-                return wikiData.thumbnail.source;
+        const exactRes = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(placeName)}`);
+        if (exactRes.ok) {
+            const exact = await exactRes.json();
+            if (exact.thumbnail?.source) {
+                placeImageCache.set(cacheKey, exact.thumbnail.source);
+                return exact.thumbnail.source;
             }
         }
-    } catch (_e) {
-        // Ignore and use fallback below
-    }
+    } catch (_e) {}
 
-    // 2) Try Wikipedia search to find better matching page title, then fetch thumbnail.
+    // 2) Best title match from Wikipedia search + summary image
     try {
-        const wikiSearchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(placeName + " " + cityName)}&format=json&origin=*`;
-        const searchRes = await fetch(wikiSearchUrl);
+        const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(placeName + " " + cityName + " landmark")}&format=json&origin=*`;
+        const searchRes = await fetch(searchUrl);
         if (searchRes.ok) {
             const searchData = await searchRes.json();
-            const candidates = (searchData.query?.search || []).slice(0, 3);
-            for (const item of candidates) {
-                const candidateTitle = item.title;
-                const summaryRes = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(candidateTitle)}`);
-                if (!summaryRes.ok) continue;
-                const summaryData = await summaryRes.json();
-                if (summaryData.thumbnail?.source) {
-                    return summaryData.thumbnail.source;
+            const candidates = searchData.query?.search || [];
+            const placeTokens = placeName.toLowerCase().split(/\s+/).filter(Boolean);
+            const best = candidates
+                .map((c) => {
+                    const title = c.title.toLowerCase();
+                    const overlap = placeTokens.filter((t) => title.includes(t)).length;
+                    return { ...c, overlap };
+                })
+                .filter((c) => c.overlap > 0)
+                .sort((a, b) => b.overlap - a.overlap || b.wordcount - a.wordcount)
+                .slice(0, 2);
+
+            for (const item of best) {
+                const sumRes = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(item.title)}`);
+                if (!sumRes.ok) continue;
+                const sum = await sumRes.json();
+                if (sum.thumbnail?.source) {
+                    placeImageCache.set(cacheKey, sum.thumbnail.source);
+                    return sum.thumbnail.source;
                 }
             }
         }
-    } catch (_e) {
-        // Ignore and use fallback below
-    }
+    } catch (_e) {}
 
-    // 3) Name-based fallback image (better match than random photos).
-    return `https://source.unsplash.com/600x400/?${encodeURIComponent(placeName + "," + cityName + ",landmark")}`;
+    // 3) Stable fallback if no image found
+    const fallback = getCategoryFallbackImage(category);
+    placeImageCache.set(cacheKey, fallback);
+    return fallback;
 }
 
 // fetchLocation is now redundant as fetchWeather provides coordinates
@@ -173,11 +196,12 @@ async function fetchCurrency() {
 }
 
 async function fetchPlaces(lat, lon, cityName) {
+    let geoShortlist = [];
     // Primary source: Geoapify (key-based)
     if (GEOAPIFY_KEY) {
         try {
             const categories = "tourism.sights,tourism.attraction,heritage,religion.place_of_worship";
-            const url = `https://api.geoapify.com/v2/places?categories=${categories}&filter=circle:${lon},${lat},15000&bias=proximity:${lon},${lat}&limit=50&apiKey=${GEOAPIFY_KEY}`;
+            const url = `https://api.geoapify.com/v2/places?categories=${categories}&filter=circle:${lon},${lat},20000&bias=proximity:${lon},${lat}&limit=80&apiKey=${GEOAPIFY_KEY}`;
             const res = await fetch(url);
             if (!res.ok) throw new Error("Geoapify failed");
             const data = await res.json();
@@ -188,10 +212,13 @@ async function fetchPlaces(lat, lon, cityName) {
                     const props = feature.properties || {};
                     const title = (props.name || "").trim();
                     if (!title || title.length < 3) return null;
+                    const badName = NOISY_NAME_PATTERNS.some((pattern) => pattern.test(title));
+                    if (badName) return null;
                     const popularity = props.rank?.popularity || 0;
                     const confidence = props.rank?.confidence || 0;
-                    if (popularity <= 0.35 || confidence <= 0.6) return null;
+                    if (popularity <= 0.25 || confidence <= 0.55) return null;
                     const address = props.formatted || props.address_line2 || props.address_line1 || "Address not available";
+                    if (!address || address.toLowerCase().includes("unnamed")) return null;
                     return {
                         title,
                         description: `Famous place in ${cityName}. ${address}`,
@@ -201,7 +228,8 @@ async function fetchPlaces(lat, lon, cityName) {
                         confidence,
                         distance: props.distance || 0,
                         address,
-                        wikipediaUrl: props.wiki ? `https://en.wikipedia.org/wiki/${props.wiki}` : ""
+                        wikipediaUrl: props.wiki ? `https://en.wikipedia.org/wiki/${props.wiki}` : "",
+                        source: "Geoapify"
                     };
                 })
                 .filter(Boolean);
@@ -224,7 +252,8 @@ async function fetchPlaces(lat, lon, cityName) {
                 if (Math.abs(a.confidence - b.confidence) > 0.05) return b.confidence - a.confidence;
                 return a.distance - b.distance;
             });
-            if (clean.length) return clean.slice(0, 8);
+            geoShortlist = clean.slice(0, 10);
+            if (geoShortlist.length >= 8) return geoShortlist;
         } catch (_geoErr) {
             // Try next source below
         }
@@ -234,7 +263,17 @@ async function fetchPlaces(lat, lon, cityName) {
     if (OTM_KEY) {
         try {
             const otmPlaces = await fetchPlacesFromOpenTripMap(lat, lon);
-            if (otmPlaces.length) return otmPlaces;
+            if (otmPlaces.length) {
+                const merged = [...geoShortlist, ...otmPlaces];
+                const seen = new Set();
+                const deduped = merged.filter((p) => {
+                    const k = p.title.toLowerCase();
+                    if (seen.has(k)) return false;
+                    seen.add(k);
+                    return true;
+                });
+                if (deduped.length >= 8) return deduped.slice(0, 10);
+            }
         } catch (_otmErr) {
             // Try next source below
         }
@@ -242,7 +281,14 @@ async function fetchPlaces(lat, lon, cityName) {
 
     // Last fallback: Wikipedia-only (no key)
     const wikiFallback = await fetchPlacesFromWikipedia(cityName);
-    return wikiFallback.slice(0, 8);
+    const merged = [...geoShortlist, ...wikiFallback];
+    const seen = new Set();
+    return merged.filter((p) => {
+        const k = p.title.toLowerCase();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+    }).slice(0, 10);
 }
 
 async function fetchPlacesFromOpenTripMap(lat, lon) {
@@ -270,7 +316,8 @@ async function fetchPlacesFromOpenTripMap(lat, lon) {
                 title,
                 description,
                 image: image || getCategoryFallbackImage("travel"),
-                category: detectCategory(title, description)
+                category: detectCategory(title, description),
+                source: "OpenTripMap"
             };
         } catch (_e) {
             return null;
@@ -307,7 +354,8 @@ async function fetchPlacesFromWikipedia(city) {
                 title: (summary.title || cleanTitle).replace(" - Wikipedia", ""),
                 description: summary.extract,
                 image: summary.thumbnail?.source || await getBestPlaceImage(cleanTitle, city, "travel"),
-                category: detectCategory(summary.title || cleanTitle, summary.extract)
+                category: detectCategory(summary.title || cleanTitle, summary.extract),
+                source: "Wikipedia"
             };
         } catch (_e) {
             return null;
@@ -407,10 +455,14 @@ function renderPlaces(places) {
                 <option value="food">🍱 Food</option>
                 <option value="historic">🏰 Historical</option>
                 <option value="park">🌳 Parks</option>
+                <option value="shopping">🛍 Shopping</option>
+                <option value="travel">✈ Travel</option>
             </select>
             <input type="text" id="placeSearchFilter" placeholder="Search in places...">
             <select id="placeSortFilter">
                 <option value="relevance">Sort: Relevance</option>
+                <option value="popularity">Sort: Popularity</option>
+                <option value="distance">Sort: Nearest</option>
                 <option value="az">Sort: A-Z</option>
                 <option value="za">Sort: Z-A</option>
                 <option value="category">Sort: Category</option>
@@ -454,6 +506,10 @@ function updatePlacesGrid() {
         filtered.sort((a, b) => a.title.localeCompare(b.title));
     } else if (sortType === "za") {
         filtered.sort((a, b) => b.title.localeCompare(a.title));
+    } else if (sortType === "popularity") {
+        filtered.sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
+    } else if (sortType === "distance") {
+        filtered.sort((a, b) => (a.distance || Number.MAX_SAFE_INTEGER) - (b.distance || Number.MAX_SAFE_INTEGER));
     } else if (sortType === "category") {
         filtered.sort((a, b) => a.category.localeCompare(b.category));
     } else if (sortType === "detailed") {
@@ -476,6 +532,7 @@ function updatePlacesGrid() {
                 <div class="place-content">
                     <h4>${place.title}</h4>
                     <span class="place-tag" data-cat="${place.category}">${place.category}</span>
+                    <span class="source-tag">${place.source || "Mixed"}</span>
                     <p>${shortText}</p>
                     ${place.distance ? `<p><strong>Distance:</strong> ${(place.distance / 1000).toFixed(1)} km</p>` : ""}
                     <button class="read-more-btn" data-place="${encodeURIComponent(JSON.stringify(place))}">Read More</button>

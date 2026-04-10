@@ -17,6 +17,15 @@
         const DEFAULT_PLACE_IMAGE = "https://picsum.photos/seed/travel-default/900/500";
         const root = document.getElementById("detailRoot");
         const raw = localStorage.getItem(PLACE_DETAIL_KEY);
+        
+        function goBackToPreviousPage(event) {
+            event.preventDefault();
+            if (window.history.length > 1) {
+                window.history.back();
+            } else {
+                window.location.href = "index.html";
+            }
+        }
 
         if (!raw) {
             root.innerHTML = `
@@ -24,10 +33,12 @@
                     <h2>No place selected</h2>
                     <p>Please go back and click Read More on a place card.</p>
                     <div class="detail-links">
-                        <a class="detail-link" href="index.html">Back to Home</a>
+                        <a id="backLink" class="detail-link" href="index.html">Back</a>
                     </div>
                 </div>
             `;
+            const backLink = document.getElementById("backLink");
+            if (backLink) backLink.addEventListener("click", goBackToPreviousPage);
         } else {
             const place = JSON.parse(raw);
             const wikiUrl = place.wikipediaUrl || `https://en.wikipedia.org/wiki/${encodeURIComponent(place.title)}`;
@@ -45,10 +56,12 @@
                     <div class="detail-links">
                         <a class="detail-link" href="${wikiUrl}" target="_blank" rel="noopener noreferrer">Wikipedia</a>
                         <a class="detail-link" href="${mapUrl}" target="_blank" rel="noopener noreferrer">Open in Maps</a>
-                        <a class="detail-link" href="index.html">Back to Home</a>
+                        <a id="backLink" class="detail-link" href="index.html">Back</a>
                     </div>
                 </div>
             `;
+            const backLink = document.getElementById("backLink");
+            if (backLink) backLink.addEventListener("click", goBackToPreviousPage);
         }
     </script>
 </body>
